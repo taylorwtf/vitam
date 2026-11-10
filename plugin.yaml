@@ -1,0 +1,59 @@
+manifest_version: 2
+name: vita-bridge
+version: "1.0.0"
+description: "Voice+camera bridge server between a PS Vita (lpp-vita, HENkaku) handheld client and the Hermes gateway: on-device-mic STT (faster-whisper), Hermes agent turns, TTS reply (Underdog Woof), optional rear-camera vision frames."
+author: local
+license: MIT
+kind: standalone
+homepage: https://github.com/REPLACE_ME/vita-bridge
+provides_commands:
+  - vita-bridge
+config_schema:
+  gateway_url:
+    type: string
+    default: "http://127.0.0.1:8642/v1/chat/completions"
+    description: "Hermes gateway OpenAI-compatible endpoint."
+  gateway_key_env:
+    type: string
+    default: "HERMES_VITA_GATEWAY_KEY"
+    description: "ENV var holding the gateway bearer token. The key itself is never stored in config or git."
+  session_key:
+    type: string
+    default: "vita-handheld"
+    description: "Stable Hermes session key so the agent keeps one coherent handheld conversation."
+  stt_model:
+    type: string
+    default: "base"
+    description: "faster-whisper model name."
+  stt_device:
+    type: string
+    default: "auto"
+    description: "cuda | cpu | auto."
+  woof_dir:
+    type: string
+    default: ""
+    description: "Path to an underdog-woof checkout (dir containing the underdog_woof package). Empty = rely on installed package."
+  tts_cap_chars:
+    type: integer
+    default: 400
+    description: "Max reply characters synthesized; on-screen text keeps up to 300."
+  port:
+    type: integer
+    default: 8643
+    description: "TCP/HTTP port the bridge listens on (Vita client connects here)."
+  files_dir:
+    type: string
+    default: ""
+    description: "Dir for served assets (VPK, sounds). Empty = plugin data dir."
+  python_bin:
+    type: string
+    default: ""
+    description: "Interpreter for the daemon (must have faster-whisper + numpy installed). Empty = Hermes' own interpreter, which usually is NOT what you want."
+  ftp_user:
+    type: string
+    default: ""
+    description: "Optional: molecularShell FTP user for file-pull fallback mode. Leave empty to disable FTP-pull (push-mode only)."
+  ftp_pass:
+    type: string
+    default: ""
+    description: "Optional: molecularShell FTP password (file-pull fallback only)."
