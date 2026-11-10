@@ -14,8 +14,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 
 def _data_dir(ctx):
     try:
-        from hermes_cli.plugin_storage import plugin_data_dir
-        return plugin_data_dir(_CMD)
+        from plugins.plugin_storage import plugin_data_dir
+        return str(plugin_data_dir(_CMD))
     except Exception:
         d = os.path.join(_HERE, 'var')
         os.makedirs(d, exist_ok=True)
