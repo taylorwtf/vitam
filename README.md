@@ -66,7 +66,7 @@ On-screen boxes tell you what's happening at every moment: `REC` while you hold,
 ## Good to know
 
 - Speech recognition and text-to-speech run locally on your computer with small free models — intelligible, not studio quality.
-- The Vita's mic can hear its own speaker; set the device down away from the speaker while it talks, or tap **O** before replying if you want to talk over it.
+- The mic can never record while the Vita itself is talking: X is disabled during playback, so the device can't overhear its own replies. Press **O** to silence a reply early and talk again.
 - There is no wake word or hands-free mode — the Vita only listens while you hold X. That's deliberate: nothing is captured unless you ask.
 
 ## When something goes wrong
