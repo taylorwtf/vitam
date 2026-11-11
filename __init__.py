@@ -35,11 +35,19 @@ def _env_for(ctx):
     env['VB_FTP_USER']       = cfg('ftp_user', '')
     env['VB_FTP_PASS']       = cfg('ftp_pass', '')
     key_env = cfg('gateway_key_env', 'HERMES_VITA_GATEWAY_KEY')
-    if key_env not in env and not cfg('gateway_url', '').startswith('http://127'):
+    # catalog rule 11: declared secrets route through agent.secret_scope so the
+    # active profile's value is used; older Hermes falls back to the process env.
+    key = ''
+    try:
+        from agent.secret_scope import get_secret as _get_secret
+        key = _get_secret(key_env) or ''
+    except Exception:
+        key = os.environ.get(key_env, '')
+    if not key and not cfg('gateway_url', '').startswith('http://127'):
         # fail closed on the transport secret: the daemon refuses to start
         # against a remote gateway without it rather than sending anonymous traffic
-        return env, 'missing env %s (gateway bearer token)' % key_env
-    env['VB_GATEWAY_KEY'] = env.get(key_env, '')
+        return env, 'missing secret %s (gateway bearer token)' % key_env
+    env['VB_GATEWAY_KEY'] = key
     return env, None
 
 

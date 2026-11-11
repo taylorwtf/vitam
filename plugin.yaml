@@ -5,6 +5,7 @@ description: "Voice+camera bridge server between a PS Vita (lpp-vita, HENkaku) h
 author: local
 license: MIT
 kind: standalone
+requires_hermes: ">=0.21.0"
 homepage: https://github.com/taylorwtf/vitam
 provides_commands:
   - vitam
