@@ -1,6 +1,6 @@
-"""vita-bridge plugin: lifecycle manager for the Vita voice/camera bridge daemon.
+"""vitam plugin: lifecycle manager for the Vita voice/camera bridge daemon.
 
-Commands:  /vita-bridge start|stop|status|logs [N]|check
+Commands:  /vitam start|stop|status|logs [N]|check
 The daemon itself (daemon/vita_bridge.py) runs under a *host* Python you point
 at via the `python_bin` setting — Hermes' own venv stays untouched. All
 configuration comes from plugin settings; secrets come only from the ENV var
@@ -8,7 +8,7 @@ named by `gateway_key_env` (and optional ftp settings), never from git.
 """
 import os, signal, subprocess, sys, urllib.request
 
-_CMD = 'vita-bridge'
+_CMD = 'vitam'
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -116,7 +116,7 @@ def _handle(ctx, args):
         pid = _pid(pidf)
         return 'running (pid %d)' % pid if _alive(pid) else 'not running'
 
-    return 'usage: /vita-bridge start|stop|status|logs [N]|check'
+    return 'usage: /vitam start|stop|status|logs [N]|check'
 
 
 def register(ctx):

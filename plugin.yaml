@@ -1,13 +1,13 @@
 manifest_version: 2
-name: vita-bridge
+name: vitam
 version: "1.0.0"
 description: "Voice+camera bridge server between a PS Vita (lpp-vita, HENkaku) handheld client and the Hermes gateway: on-device-mic STT (faster-whisper), Hermes agent turns, TTS reply (Underdog Woof), optional rear-camera vision frames."
 author: local
 license: MIT
 kind: standalone
-homepage: https://github.com/REPLACE_ME/vita-bridge
+homepage: https://github.com/taylorwtf/vitam
 provides_commands:
-  - vita-bridge
+  - vitam
 config_schema:
   gateway_url:
     type: string
