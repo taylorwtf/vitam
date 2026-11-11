@@ -47,9 +47,9 @@ Then start it:
 
 ### 2. The Vita
 
-Build `HERMES.vpk` from the `client/` folder — [docs/build-client.md](docs/build-client.md) walks through it in five steps. Before building, open `client/index.lua` and set `BRIDGE_IP` (line 26) to your computer's LAN address.
+**Easiest:** download the prebuilt `HERMES.vpk` from [Releases](https://github.com/taylorwtf/vitam/releases), install it with molecularShell (press **SELECT** to start the FTP server, upload the VPK, select it, press **X**), then open molecularShell's editor on `ux0:/app/LPPV00001/index.lua`, set `BRIDGE_IP` (line 26) to your computer's LAN address, and restart the app. Until that's set, the app will show `connect_fail` — that's expected.
 
-Install on the Vita with molecularShell: press **SELECT** (starts the FTP server), upload the VPK, select it, press **X**.
+**Build your own** (if you want to modify the client): build from the `client/` folder — [docs/build-client.md](docs/build-client.md) walks through it in five steps. Before building, set `BRIDGE_IP` in `client/index.lua`.
 
 ## Using it
 
