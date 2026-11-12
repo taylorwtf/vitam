@@ -11,6 +11,7 @@ Everything runs on your network. The Vita talks only to the bridge on your machi
 - A PS Vita or PS TV running HENkaku / h-encore on 3.60 ([setup guide](https://henkaku.xyz))
 - A computer on the same network — the bridge runs there
 - Python 3 with `faster-whisper` and `numpy` installed on that computer
+- [Underdog Woof](https://huggingface.co/ConwayResearch/Underdog-Woof) — the small free TTS model the bridge speaks with (numpy-only, ~40 MB). Get it with `hf download ConwayResearch/Underdog-Woof --local-dir underdog-woof`, then point the `woof_dir` setting at that folder (or put the checkout somewhere the bridge's Python can import `underdog_woof` from). Non-commercial license — keep the "Voice by Underdog Woof" credit.
 
 ## Setup — about 5 minutes
 
@@ -31,6 +32,7 @@ hermes plugins config vitam
 |---|---|
 | `gateway_url` | Your Hermes gateway endpoint (default `http://127.0.0.1:8642/v1/chat/completions`) |
 | `python_bin` | Path to a Python 3 that has `faster-whisper` + `numpy` |
+| `woof_dir` | The `underdog-woof` folder from the download above (empty = the package must already be importable) |
 
 Export your gateway token (it is never stored in config or git):
 
@@ -45,11 +47,13 @@ Then start it:
 /vitam start
 ```
 
+`/vitam start` prints a **pairing token** — the bridge creates it once (in its data folder) and refuses every connection that doesn't present it, so someone else on your Wi-Fi can't run your agent from your gateway key. Keep the token from that output; you'll put it on the Vita in the next step (`/vitam token` re-shows it any time).
+
 ### 2. The Vita
 
-**Easiest:** download the prebuilt `HERMES.vpk` from [Releases](https://github.com/taylorwtf/vitam/releases), install it with molecularShell (press **SELECT** to start the FTP server, upload the VPK, select it, press **X**), then open molecularShell's editor on `ux0:/app/LPPV00001/index.lua`, set `BRIDGE_IP` (line 26) to your computer's LAN address, and restart the app. Until that's set, the app will show `connect_fail` — that's expected.
+**Easiest:** download the prebuilt `HERMES.vpk` from [Releases](https://github.com/taylorwtf/vitam/releases), install it with molecularShell (press **SELECT** to start the FTP server, upload the VPK, select it, press **X**), then open molecularShell's editor on `ux0:/app/LPPV00001/index.lua`, set `BRIDGE_IP` (near the top) to your computer's LAN address and `PAIR_TOKEN` to the token `/vitam start` printed, and restart the app. Until those are set, the app will show `connect_fail` or `bridge: pair` — that's expected.
 
-**Build your own** (if you want to modify the client): build from the `client/` folder — [docs/build-client.md](docs/build-client.md) walks through it in five steps. Before building, set `BRIDGE_IP` in `client/index.lua`.
+**Build your own** (if you want to modify the client): build from the `client/` folder — [docs/build-client.md](docs/build-client.md) walks through it in five steps. Before building, set `BRIDGE_IP` and `PAIR_TOKEN` in `client/index.lua`.
 
 ## Using it
 
@@ -72,6 +76,7 @@ On-screen boxes tell you what's happening at every moment: `REC` while you hold,
 ## When something goes wrong
 
 - `connect_fail` on the Vita → `BRIDGE_IP` doesn't match the machine running `/vitam start`, or a firewall is blocking the port (default 8643).
+- `bridge: pair` or `expected G got [E pair]` → `PAIR_TOKEN` on the Vita doesn't match `/vitam token` on the bridge.
 - `/vitam check` shows what's up and what isn't.
 - `/vitam logs 100` shows what the bridge did.
 - `/vitam stop` shuts the daemon down.

@@ -5,12 +5,18 @@
 # lifecycle manager); nothing is hardcoded: no credentials, no LAN IPs, no
 # absolute paths. Wire protocol (raw TCP over the HTTP port; Vita lpp sockets
 # partial-send, so every frame is acked and the pipeline NEVER holds one
-# connection — results are parked and fetched on fresh short-lived sockets):
-#   "U <id>\n" open | "C <n>\n"+bytes -> "A\n" | "T <id> <wavlen> <pnglen>\n"
-#     -> "G\n" then result via  P <id> -> "W"(pending) | "E <msg>" | "R <alen> <tlen>\n"+body
-#   "T <id> F <wavname> <pngname|-> [H <ip>]"  FTP-pull fallback (needs ftp_user/pass)
-#   "D <id>\n" discard | "X\n" abort | HTTP /ping /files/<name> /talk /abort
+# connection — results are parked and fetched on fresh short-lived sockets).
+# EVERY socket connection authenticates first: the first line must be
+# "K <pair-token>\n" (token auto-created on first start in the plugin data
+# dir, compared with hmac.compare_digest); anything else gets "E pair" then
+# the connection is dropped:
+#   "U <id>\n" open | "C <n>\n"+bytes (n<=4MiB, <=16MiB buffered per session)
+#     -> "A\n" | "T <id> <wavlen> <pnglen>\n" -> "G\n" then result via
+#     P <id> -> "W"(pending) | "E <msg>" | "R <alen> <tlen>\n"+body
+#   "D <id>\n" discard | "X\n" abort
+# HTTP: /ping open; /talk /abort /files/<name> require header "X-Pair-Token: <token>"
 import os, sys, io, json, wave, base64, socket, threading, time
+import hmac, secrets
 import urllib.request, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -23,16 +29,55 @@ WOOF_DIR     = os.environ.get('VB_WOOF_DIR', '')
 TTS_CAP      = int(os.environ.get('VB_TTS_CAP', '400'))
 PORT         = int(os.environ.get('VB_PORT', '8643'))
 FILES_DIR    = os.environ.get('VB_FILES_DIR') or os.path.join(os.getcwd(), 'files')
-FTP_USER     = os.environ.get('VB_FTP_USER', '')
-FTP_PASS     = os.environ.get('VB_FTP_PASS', '')
+TOKEN_FILE   = os.environ.get('VB_TOKEN_FILE') or os.path.join(os.getcwd(), 'pair.token')
+
+MAX_CHUNK         = 4 << 20    # hard cap on a single "C <n>" frame
+MAX_SESSION_BYTES = 16 << 20   # hard cap on total buffered bytes per session
+
+
+def load_token():
+    """Pairing token: created 0600 in the plugin data dir on first start,
+    then reused. The Vita client must present it on every connection."""
+    for _ in range(2):
+        try:
+            t = open(TOKEN_FILE).read().strip()
+            if t:
+                return t
+        except FileNotFoundError:
+            pass
+        try:
+            fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                f.write(secrets.token_urlsafe(24) + '\n')
+        except FileExistsError:
+            continue
+        return open(TOKEN_FILE).read().strip()
+    raise RuntimeError('cannot read/create pairing token at %s' % TOKEN_FILE)
+
+
+PAIR_TOKEN = load_token()
+
+
+def ok_token(candidate):
+    return hmac.compare_digest(candidate.encode('utf-8', 'ignore'),
+                               PAIR_TOKEN.encode('utf-8', 'ignore'))
+
 
 sys.path.insert(0, os.path.join(FILES_DIR, 'whisper'))
 if WOOF_DIR:
     sys.path.insert(0, WOOF_DIR)
 
 from faster_whisper import WhisperModel
-model = WhisperModel(STT_MODEL, device=('cuda' if STT_DEVICE == 'auto' else STT_DEVICE),
-                     compute_type='float16')
+try:
+    import ctranslate2
+    HAVE_CUDA = ctranslate2.get_cuda_device_count() > 0
+except Exception:
+    HAVE_CUDA = False
+# compute_type per device: fp16 only exists on CUDA; CPU gets int8. 'auto'
+# maps to CPU when there is no CUDA (no point building the CUDA path).
+DEVICE = 'cuda' if (STT_DEVICE == 'cuda' or (STT_DEVICE == 'auto' and HAVE_CUDA)) else 'cpu'
+model = WhisperModel(STT_MODEL, device=DEVICE,
+                     compute_type='float16' if DEVICE == 'cuda' else 'int8')
 from underdog_woof import Woof
 tts = Woof()
 print('bridge warm: whisper+tts loaded', flush=True)
@@ -69,10 +114,11 @@ def hermes(text, img_b64):
         {'role': 'system', 'content': VITA_SYSTEM},
         {'role': 'user', 'content': content}]}
     body['user'] = SESSION_KEY
-    req = urllib.request.Request(GATEWAY_URL, json.dumps(body).encode(), {
-        'Content-Type': 'application/json',
-        'Authorization': '***' + GATEWAY_KEY,
-        'X-Hermes-Session-Key': SESSION_KEY})
+    headers = {'Content-Type': 'application/json',
+               'X-Hermes-Session-Key': SESSION_KEY}
+    if GATEWAY_KEY:
+        headers['Authorization'] = 'Bearer ' + GATEWAY_KEY
+    req = urllib.request.Request(GATEWAY_URL, json.dumps(body).encode(), headers)
     with urllib.request.urlopen(req, timeout=120) as r:
         d = json.load(r)
     return d['choices'][0]['message']['content']
@@ -107,30 +153,6 @@ def readline(conn):
             break
         buf += c
     return buf.decode(errors='replace').strip()
-
-
-def ftp_pull(peer_ip, name, timeout=30):
-    # Config-gated fallback (plugin settings ftp_user/ftp_pass). Push-mode is the
-    # default path; FTP-pull exists only for clients that store-then-notify.
-    if not FTP_USER:
-        raise RuntimeError('ftp-pull disabled: set ftp_user/ftp_pass in plugin settings')
-    import ftplib
-    f = ftplib.FTP()
-    try:
-        f.connect(peer_ip, 1337, timeout=timeout)
-        f.login(FTP_USER, FTP_PASS)
-        buf = bytearray()
-        f.retrbinary('RETR /ux0:/data/' + name, buf.extend)
-        try:
-            f.quit()
-        except Exception:
-            pass
-        return bytes(buf)
-    finally:
-        try:
-            f.sock.close()
-        except Exception:
-            pass
 
 
 def run_pipeline(wav, png, log):
@@ -175,33 +197,31 @@ def handle_session(conn, sid, addr):
         if not p:
             continue
         if p[0] == 'C' and len(p) == 2:
-            data = readn(conn, int(p[1]))
+            try:
+                n = int(p[1])
+            except ValueError:
+                n = -1
+            if n < 0 or n > MAX_CHUNK:
+                log('C-REJECT n=%r' % p[1])
+                conn.sendall(b'E oversize\n')
+                break
+            data = readn(conn, n)
             if data is None:
                 break
             with slock:
-                sessions.setdefault(sid, bytearray()).extend(data)
+                buf = sessions.setdefault(sid, bytearray())
+                if len(buf) + n > MAX_SESSION_BYTES:
+                    sessions.pop(sid, None)
+                    log('C-CAP sid=%s %dB' % (sid, len(buf)))
+                    conn.sendall(b'E oversize\n')
+                    break
+                buf.extend(data)
             conn.sendall(b'A\n')
-        elif p[0] == 'T' and len(p) >= 3:
-            if p[2] == 'F':
-                try:
-                    host = addr
-                    if 'H' in p:
-                        host = p[p.index('H') + 1]
-                    wavb = ftp_pull(host, p[3].split(':')[-1])
-                    pngb = b''
-                    if len(p) > 4 and p[4] != '-':
-                        pngb = ftp_pull(host, p[4].split(':')[-1])
-                    log('FTP-PULL %s=%d png=%d' % (p[3], len(wavb), len(pngb)))
-                except Exception as e:
-                    log('FTP-ERR %s' % e)
-                    wavb, pngb = b'', b''
-                with slock:
-                    sessions.pop(p[1], None)
-            else:
-                with slock:
-                    blob = bytes(sessions.pop(p[1] if len(p) > 1 else sid, b''))
-                wlen = int(p[2]); plen = int(p[3]) if len(p) > 3 else 0
-                wavb, pngb = blob[:wlen], blob[wlen:wlen + plen]
+        elif p[0] == 'T' and len(p) >= 4:
+            with slock:
+                blob = bytes(sessions.pop(p[1], b''))
+            wlen = int(p[2]); plen = int(p[3])
+            wavb, pngb = blob[:wlen], blob[wlen:wlen + plen]
             if not wavb:
                 conn.sendall(b'E no-audio\n')
                 continue
@@ -237,52 +257,77 @@ class H(BaseHTTPRequestHandler):
     def log(self, m):
         print('%s %s %s' % (now(), self.client_address[0], m), flush=True)
 
+    def _authed(self):
+        return ok_token(self.headers.get('X-Pair-Token', ''))
+
+    def _pull(self, sid):
+        with slock:
+            d = REPLIES.get(sid)
+        if d is None:
+            self.connection.sendall(b'E unknown-session\n')
+        elif d['state'] == 'pending':
+            self.connection.sendall(b'W\n')
+        elif d['state'] == 'error':
+            self.connection.sendall(('E pipeline: ' + d['err'] + '\n').encode())
+        else:
+            wav = d['wav']
+            txt = (d.get('text') or '')[:300].encode('utf-8', 'ignore')
+            self.connection.sendall(('R %d %d\n' % (len(wav), len(txt))).encode())
+            for i in range(0, len(wav), 2048):
+                self.connection.sendall(wav[i:i+2048])
+                time.sleep(0.04)
+            if txt:
+                self.connection.sendall(txt)
+                time.sleep(0.04)
+            with slock:
+                REPLIES.pop(sid, None)
+            self.log('PULL-R %s %d bytes' % (sid, len(wav)))
+
+    def _reject(self, reason=b'E pair\n'):
+        # drain whatever the client already pipelined, THEN answer and close;
+        # closing over unread bytes RSTs the socket and eats our reply
+        try:
+            self.connection.settimeout(0.5)
+            while self.connection.recv(4096):
+                pass
+        except Exception:
+            pass
+        try:
+            self.connection.sendall(reason)
+        except Exception:
+            pass
+
     def handle(self):
         try:
-            first = self.connection.recv(4, socket.MSG_PEEK)
+            first = self.connection.recv(2, socket.MSG_PEEK)
         except Exception:
             first = b''
-        if first.startswith(b'P '):
+        if first == b'K ':
+            # every socket connection authenticates before it can do anything
             try:
                 line = readline(self.connection)
-                sid = line.split()[1] if line and len(line.split()) > 1 else 'x'
-                with slock:
-                    d = REPLIES.get(sid)
-                if d is None:
-                    self.connection.sendall(b'E unknown-session\n')
-                elif d['state'] == 'pending':
-                    self.connection.sendall(b'W\n')
-                elif d['state'] == 'error':
-                    self.connection.sendall(('E pipeline: ' + d['err'] + '\n').encode())
+                if not ok_token((line or '')[2:]):
+                    self.log('AUTH-REJECT')
+                    self._reject()
+                    return
+                nxt = readline(self.connection)
+                q = (nxt or '').split()
+                if len(q) >= 2 and q[0] == 'U':
+                    handle_session(self.connection, q[1], self.client_address[0])
+                elif len(q) >= 2 and q[0] == 'P':
+                    self._pull(q[1])
                 else:
-                    wav = d['wav']
-                    txt = (d.get('text') or '')[:300].encode('utf-8', 'ignore')
-                    self.connection.sendall(('R %d %d\n' % (len(wav), len(txt))).encode())
-                    for i in range(0, len(wav), 2048):
-                        self.connection.sendall(wav[i:i+2048])
-                        time.sleep(0.04)
-                    if txt:
-                        self.connection.sendall(txt)
-                        time.sleep(0.04)
-                    with slock:
-                        REPLIES.pop(sid, None)
-                    self.log('PULL-R %s %d bytes' % (sid, len(wav)))
-            except Exception as e:
-                self.log('P-ERR %s' % e)
-            finally:
-                try: self.connection.close()
-                except Exception: pass
-            return
-        if first.startswith(b'U '):
-            try:
-                line = readline(self.connection)
-                sid = line.split()[1] if line and len(line.split()) > 1 else 'x'
-                handle_session(self.connection, sid, self.client_address[0])
+                    self.connection.sendall(b'E bad-cmd\n')
             except Exception as e:
                 self.log('SESS-ERR %s' % e)
             finally:
                 try: self.connection.close()
                 except Exception: pass
+            return
+        if first in (b'U ', b'P ') or first.startswith(b'P '):
+            # unauthenticated socket hello (pre-pairing clients): refuse, don't serve
+            self.log('AUTH-REJECT no-token')
+            self._reject()
             return
         BaseHTTPRequestHandler.handle(self)
 
@@ -291,6 +336,8 @@ class H(BaseHTTPRequestHandler):
             b = b'HERMES-REACHABLE'
             self.send_response(200); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
             return
+        if not self._authed():
+            self.send_error(403); return
         if self.path.startswith('/files/'):
             name = self.path.split('/')[-1].replace('..', '')
             fp = os.path.join(FILES_DIR, name)
@@ -312,6 +359,8 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(n)
+        if not self._authed():
+            self.send_error(403); return
         if self.path == '/abort':
             ABORT.set(); self.log('ABORT'); b = b'ok'
             self.send_response(200); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
@@ -337,4 +386,5 @@ class H(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     os.makedirs(FILES_DIR, exist_ok=True)
+    print('pairing enforced: token at %s (0600)' % TOKEN_FILE, flush=True)
     ThreadingHTTPServer(('0.0.0.0', PORT), H).serve_forever()

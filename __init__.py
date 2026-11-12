@@ -1,10 +1,11 @@
 """vitam plugin: lifecycle manager for the Vita voice/camera bridge daemon.
 
-Commands:  /vitam start|stop|status|logs [N]|check
+Commands:  /vitam start|stop|status|token|logs [N]|check
 The daemon itself (daemon/vita_bridge.py) runs under a *host* Python you point
 at via the `python_bin` setting — Hermes' own venv stays untouched. All
 configuration comes from plugin settings; secrets come only from the ENV var
-named by `gateway_key_env` (and optional ftp settings), never from git.
+named by `gateway_key_env`, never from git. The daemon gates every connection
+on a pairing token stored 0600 in the plugin data dir.
 """
 import os, signal, subprocess, sys, urllib.request
 
@@ -24,7 +25,17 @@ def _data_dir(ctx):
 
 def _env_for(ctx):
     cfg = lambda k, d='': ctx.get_config(k, d)
-    env = dict(os.environ)
+    # Minimal env: the daemon runs a user-chosen interpreter with third-party
+    # packages, so it must NOT inherit the full process env (every provider
+    # API key in this process would ride along). VB_* + the handful of vars a
+    # Python TTS/STT stack actually needs.
+    env = {k: v for k, v in os.environ.items() if k.startswith('VB_')}
+    for k in ('PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'XDG_CACHE_HOME',
+              'HF_HOME', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH',
+              'DYLD_FRAMEWORK_PATH', 'CUDA_VISIBLE_DEVICES'):
+        if k in os.environ:
+            env[k] = os.environ[k]
+    env.setdefault('HOME', os.path.expanduser('~'))  # whisper/ctranslate2 model cache
     env['VB_GATEWAY_URL']    = cfg('gateway_url', 'http://127.0.0.1:8642/v1/chat/completions')
     env['VB_SESSION_KEY']    = cfg('session_key', 'vita-handheld')
     env['VB_STT_MODEL']      = cfg('stt_model', 'base')
@@ -32,23 +43,45 @@ def _env_for(ctx):
     env['VB_WOOF_DIR']       = cfg('woof_dir', '')
     env['VB_TTS_CAP']        = str(cfg('tts_cap_chars', 400))
     env['VB_PORT']           = str(cfg('port', 8643))
-    env['VB_FTP_USER']       = cfg('ftp_user', '')
-    env['VB_FTP_PASS']       = cfg('ftp_pass', '')
     key_env = cfg('gateway_key_env', 'HERMES_VITA_GATEWAY_KEY')
     # catalog rule 11: declared secrets route through agent.secret_scope so the
-    # active profile's value is used; older Hermes falls back to the process env.
-    key = ''
+    # active profile's value is used. Only the *import* may fall back to the
+    # process env (older Hermes); if get_secret itself raises (e.g.
+    # UnscopedSecretError in a multi-profile process) that surfaces as an error
+    # instead of silently using another profile's key.
     try:
         from agent.secret_scope import get_secret as _get_secret
-        key = _get_secret(key_env) or ''
-    except Exception:
-        key = os.environ.get(key_env, '')
+    except ImportError:
+        _get_secret = None
+    key = _get_secret(key_env) if _get_secret else os.environ.get(key_env, '')
+    key = key or ''
     if not key and not cfg('gateway_url', '').startswith('http://127'):
         # fail closed on the transport secret: the daemon refuses to start
         # against a remote gateway without it rather than sending anonymous traffic
         return env, 'missing secret %s (gateway bearer token)' % key_env
     env['VB_GATEWAY_KEY'] = key
     return env, None
+
+
+def _pair_token(dd):
+    """Read the pairing token, creating it (0600) if this is the first start."""
+    tokf = os.path.join(dd, 'pair.token')
+    for _ in range(2):
+        try:
+            t = open(tokf).read().strip()
+            if t:
+                return t
+        except FileNotFoundError:
+            pass
+        import secrets as _secrets
+        try:
+            fd = os.open(tokf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                f.write(_secrets.token_urlsafe(24) + '\n')
+        except FileExistsError:
+            continue
+        return open(tokf).read().strip()
+    return open(tokf).read().strip()
 
 
 def _pid(path):
@@ -82,12 +115,17 @@ def _handle(ctx, args):
         env, err = _env_for(ctx)
         if err:
             return 'refusing to start: %s' % err
+        token = _pair_token(dd)
+        env['VB_TOKEN_FILE'] = os.path.join(dd, 'pair.token')
         python_bin = ctx.get_config('python_bin', '') or sys.executable
         with open(logf, 'ab') as lf:
             p = subprocess.Popen([python_bin, os.path.join(_HERE, 'daemon', 'vita_bridge.py')],
                                  stdout=lf, stderr=lf, env=env, cwd=dd)
         open(pidf, 'w').write(str(p.pid))
-        return 'started pid %d (log: %s)' % (p.pid, logf)
+        return ('started pid %d (log: %s)\npairing token: %s\n'
+                'set PAIR_TOKEN in client/index.lua (or ux0:/app/LPPV00001/index.lua '
+                'on an installed VPK) to that value, then restart the Vita app.'
+                % (p.pid, logf, token))
 
     if cmd == 'stop':
         pid = _pid(pidf)
@@ -120,15 +158,18 @@ def _handle(ctx, args):
             out.append('/ping: unreachable (%s)' % type(e).__name__)
         return '\n'.join(out)
 
+    if cmd == 'token':
+        return 'pairing token: %s' % _pair_token(dd)
+
     if cmd == 'status':
         pid = _pid(pidf)
         return 'running (pid %d)' % pid if _alive(pid) else 'not running'
 
-    return 'usage: /vitam start|stop|status|logs [N]|check'
+    return 'usage: /vitam start|stop|status|token|logs [N]|check'
 
 
 def register(ctx):
     ctx.register_command(
         _CMD, _handle,
         description='Manage the PS Vita voice/camera bridge daemon.',
-        args_hint='start|stop|status|logs [N]|check')
+        args_hint='start|stop|status|token|logs [N]|check')

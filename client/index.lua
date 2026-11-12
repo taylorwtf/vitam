@@ -21,9 +21,13 @@
 --   thinking progress bar, speaking equalizer), footer key legend, CAM chip,
 --   on-screen reply text (bridge sends "R len tlen" + audio + text; tlen
 --   optional so an old bridge still works).
+-- v2.34: pairing - every connection opens with "K <PAIR_TOKEN>"; the vitam
+--   1.1.0 bridge authenticates it (hmac.compare_digest) before serving
+--   anything and answers "E pair" to unauthenticated sockets.
 -- X talk | R rear cam | O cancel/stop | up/down scroll | START exit
 
 local BRIDGE_IP   = "192.168.1.10"  -- EDIT ME: the machine running /vitam start
+local PAIR_TOKEN  = "PASTE-TOKEN-HERE"  -- EDIT ME: printed by /vitam start (/vitam token re-shows it)
 local BRIDGE_PORT = 8643
 local STEPLOG     = "ux0:/data/step.log"
 local TALK_FILE   = "ux0:/data/talk.wav"
@@ -351,6 +355,7 @@ local function talk()
   step("connected")
   session = session + 1
   local sid = "v" .. tostring(session)
+  sendall(skt, "K " .. PAIR_TOKEN .. "\n")   -- pairing first: bridge drops unauthenticated sockets
   sendall(skt, "U " .. sid .. "\n")
   sendall(skt, "C " .. tostring(#wav + plen) .. "\n")
   if not sendall(skt, wav) or (plen > 0 and not sendall(skt, png)) then
@@ -380,6 +385,7 @@ local function talk()
     end
     local sk2 = Socket.connect(BRIDGE_IP, BRIDGE_PORT)
     if type(sk2) == "number" and sk2 ~= 0 then
+      sendall(sk2, "K " .. PAIR_TOKEN .. "\n")
       sendall(sk2, "P " .. sid .. "\n")
       local hdr = recvline(sk2, 300)
       step("p" .. try .. "_" .. hdr:gsub("%c", "."):sub(1, 14))

@@ -29,6 +29,12 @@ not clean errors.
 
 ## Daemon / protocol
 
+- **Every connection authenticates.** Socket connections must open with
+  `K <pair-token>` (token auto-created 0600 in the plugin data dir on first
+  `/vitam start`, compared with `hmac.compare_digest`); HTTP `/talk` `/abort`
+  `/files/*` need header `X-Pair-Token`. Unauthenticated gets `E pair` / 403
+  and a disconnect. `C <n>` frames are capped at 4 MiB each / 16 MiB per
+  session; overruns answer `E oversize` and drop the session buffer.
 - **Vita sockets die ~10s after connect.** The client never blocks waiting
   for a reply; every request is a fresh short-lived connection, and results
   are parked server-side (`PENDING` dict) for short-budget polls. Don't

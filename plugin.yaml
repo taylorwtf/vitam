@@ -1,11 +1,13 @@
 manifest_version: 2
 name: vitam
-version: "1.0.0"
+version: "1.1.0"
 description: "Voice+camera bridge server between a PS Vita (lpp-vita, HENkaku) handheld client and the Hermes gateway: on-device-mic STT (faster-whisper), Hermes agent turns, TTS reply (Underdog Woof), optional rear-camera vision frames."
 author: local
 license: MIT
 kind: standalone
 requires_hermes: ">=0.21.0"
+requires_env:
+  - HERMES_VITA_GATEWAY_KEY
 homepage: https://github.com/taylorwtf/vitam
 provides_commands:
   - vitam
@@ -50,11 +52,3 @@ config_schema:
     type: string
     default: ""
     description: "Interpreter for the daemon (must have faster-whisper + numpy installed). Empty = Hermes' own interpreter, which usually is NOT what you want."
-  ftp_user:
-    type: string
-    default: ""
-    description: "Optional: molecularShell FTP user for file-pull fallback mode. Leave empty to disable FTP-pull (push-mode only)."
-  ftp_pass:
-    type: string
-    default: ""
-    description: "Optional: molecularShell FTP password (file-pull fallback only)."
