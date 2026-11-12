@@ -302,8 +302,9 @@ class H(BaseHTTPRequestHandler):
             first = self.connection.recv(2, socket.MSG_PEEK)
         except Exception:
             first = b''
-        if first == b'K ':
+        if first.startswith(b'K'):
             # every socket connection authenticates before it can do anything
+            # (MSG_PEEK may have returned only b'K' — readline waits for the line)
             try:
                 line = readline(self.connection)
                 if not ok_token((line or '')[2:]):
@@ -324,7 +325,7 @@ class H(BaseHTTPRequestHandler):
                 try: self.connection.close()
                 except Exception: pass
             return
-        if first in (b'U ', b'P ') or first.startswith(b'P '):
+        if first in (b'U ', b'P '):
             # unauthenticated socket hello (pre-pairing clients): refuse, don't serve
             self.log('AUTH-REJECT no-token')
             self._reject()
@@ -357,10 +358,14 @@ class H(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
-        n = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(n)
+        # auth BEFORE touching the body: reading Content-Length bytes first
+        # would let an unauthenticated peer force allocation of any size
         if not self._authed():
             self.send_error(403); return
+        n = int(self.headers.get('Content-Length', 0))
+        if n < 0 or n > MAX_SESSION_BYTES:
+            self.send_error(400); return
+        body = self.rfile.read(n)
         if self.path == '/abort':
             ABORT.set(); self.log('ABORT'); b = b'ok'
             self.send_response(200); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
