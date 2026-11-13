@@ -36,7 +36,8 @@ def _env_for(ctx):
         if k in os.environ:
             env[k] = os.environ[k]
     env.setdefault('HOME', os.path.expanduser('~'))  # whisper/ctranslate2 model cache
-    env['VB_GATEWAY_URL']    = cfg('gateway_url', 'http://127.0.0.1:8642/v1/chat/completions')
+    gw_url = cfg('gateway_url', 'http://127.0.0.1:8642/v1/chat/completions')
+    env['VB_GATEWAY_URL']    = gw_url
     env['VB_SESSION_KEY']    = cfg('session_key', 'vita-handheld')
     env['VB_STT_MODEL']      = cfg('stt_model', 'base')
     env['VB_STT_DEVICE']     = cfg('stt_device', 'auto')
@@ -55,7 +56,7 @@ def _env_for(ctx):
         _get_secret = None
     key = _get_secret(key_env) if _get_secret else os.environ.get(key_env, '')
     key = key or ''
-    if not key and not cfg('gateway_url', '').startswith('http://127'):
+    if not key and not gw_url.startswith('http://127'):
         # fail closed on the transport secret: the daemon refuses to start
         # against a remote gateway without it rather than sending anonymous traffic
         return env, 'missing secret %s (gateway bearer token)' % key_env
@@ -169,7 +170,11 @@ def _handle(ctx, args):
 
 
 def register(ctx):
+    # Hermes invokes the command handler as fn(raw_args) — see
+    # hermes_cli.plugin_command_dispatch.invoke_plugin_command — so bind ctx
+    # in a closure; registering _handle directly would receive the raw arg
+    # string as ctx.
     ctx.register_command(
-        _CMD, _handle,
+        _CMD, lambda raw_args="", **_: _handle(ctx, raw_args),
         description='Manage the PS Vita voice/camera bridge daemon.',
         args_hint='start|stop|status|token|logs [N]|check')
